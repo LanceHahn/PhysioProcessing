@@ -1,6 +1,5 @@
 
 from scipy.io import wavfile
-import math
 
 samplerate, data = wavfile.read('BYB_Recording_2023-09-08_11_35_48.wav') # read data file to find num of samples per a second and the amplitude at each sample
 length = data.shape[0] / samplerate; # calculate the length of the audio file in seconds
