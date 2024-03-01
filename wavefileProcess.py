@@ -12,7 +12,7 @@ print(f"Highest Amplitude = {maxAmplitude}")
 print(f"Lowest Amplitude = {minAmplitude}")
 for i in range(data.shape[0]):
     if maxAmplitude == data[i]: # compare each sample's amplitude to test if it is the maximum
-        print(f"max {i / samplerate}s") # display when at maximum point
+        print(f"location of max in waveform{i / samplerate}s") # display when at maximum point
     elif minAmplitude == data[i]: # compare each sample's amplitude to test if it is the minimum
-        print(f"min {i / samplerate}s") # display when at minimum point
+        print(f"location of min in waveform {i / samplerate}s") # display when at minimum point
 
