@@ -2,3 +2,5 @@ data/
 Literature/
 .DS_Store
 __pycache__/
+.idea/
+
