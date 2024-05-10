@@ -2,9 +2,10 @@ import copy
 import os
 import pwd
 from mne.io.eeglab import read_raw_eeglab, read_epochs_eeglab
-import matplotlib.pyplot as plt
 import numpy as np
-from blinkDection import findBlinkWave, findBlinks, combineWaves, plotWaves, plotMotifMatchesMultiElectrodes
+from blinkDection import (findBlinkWave, findBlinks, combineWaves, plotWaves, zeroOutOfRange,
+                          plotMotifMatchesMultiElectrodes, plotEEGs, plotMotifMatches,
+                          plotSynchedMeanWaves)
 def get_username():
     return pwd.getpwuid(os.getuid())[0]
 
@@ -35,15 +36,14 @@ if len(channelString) < 1:
     channelString = '14'
 goodChannels = channelString.split(' ')
 goodChannels = ["E" + ch for ch in goodChannels]
-goodIndecies = []
-for ch in goodChannels:
-    goodIndecies.append([electIX for electIX in range(len(electLabels)) if electLabels[electIX] == ch][0])
+goodIndecies = [electLabels.index(x) for x in goodChannels]
 startTime = int(60 * 21)
 endTime = int(60 * 22)
 sampleRate = 1000
 blinkDurationMS = 300  # 150
 waveDuration = blinkDurationMS
 extend = False
+goBig = True
 delta = 30
 if not extend:
     print(f"extend is hard-coded to be False which means that the wave will be held to the {blinkDurationMS}ms expected time window.")
@@ -59,22 +59,13 @@ if len(timeString) < 1:
     timeString = '721'
 endTime = int(timeString)
 print("Generating plot of electrode signal(s)")
-for electIX in goodIndecies:
-    print(f"{electLabels[electIX]} ", end="")
-    adjusted = [x if x < maxReal else None for x in allData[electIX]]
-    maxV = max(adjusted[startTime * 1000:endTime * 1000])
-    minV = min(adjusted[startTime * 1000:endTime * 1000])
-    adjusted = [x - maxV + base if x < maxReal else None for x in allData[electIX]]
-    plt.plot(tLabels[startTime*1000:endTime*1000],
-             adjusted[startTime*1000:endTime*1000],
-             label=electLabels[electIX])
-    base += -0.0003 + minV - maxV
-plt.title('initial EEG plot')
-plt.legend()
-plt.show()
+startIX = startTime * sampleRate
+endIX = endTime * sampleRate
+plotEEGs([allData[electIX][startIX:endIX] for electIX in goodIndecies],
+         tLabels[startIX:endIX],
+         [electLabels[electIX] for electIX in goodIndecies])
 
 interBlink = 60 / 12  # 12 times per minute unit: seconds
-dwnSample = 1
 
  #150 ms #0.3 # 0.1  # unit: seconds
 blinkOutcomes = {}
@@ -86,27 +77,23 @@ for electIX in goodIndecies:
     blinkDuration = blinkDurationMS / sampleRate
     blinkOutcomes[electIX] = {
         'original': {},
-        'extended': {}
+        'extended': {},
+        'Big': {}
     }
-    if dwnSample > 1:
-        sequ = [allData[electIX][x] for x in range(startTime*sampleRate, endTime*sampleRate, dwnSample)]
-    else:
-        sequ = allData[electIX][startTime * sampleRate:endTime * sampleRate]
+    sequ = allData[electIX][startTime * sampleRate:endTime * sampleRate]
     # Find initial blink wave as best duplicated sequence.
     blinkWave = findBlinkWave(sequ, blinkDuration,
-                              sampleHz=int(sampleRate/dwnSample),
+                              sampleHz=sampleRate,
                               tLabels=tLabels[startTime*1000:endTime*1000],
-                              verbose=5, electrode=electLabels[electIX])
+                              verbose=2, electrode=electLabels[electIX])
 
     blinks, blinkDis, _ = findBlinks(blinkWave, sequ, blinkDuration,
-                        sampleHz=int(sampleRate/dwnSample),
+                        sampleHz=sampleRate,
                         tLabels=tLabels[startTime*1000:endTime*1000],
-                        verbose=6, electrode=electLabels[electIX])
+                        verbose=3, electrode=electLabels[electIX])
     startIndecies = [np.where(tLabels == b)[0][0] - (startTime*1000) for b in blinks]
     newBlinkWave = combineWaves([sequ[start: start + blinkDurationMS]
                                  for start in startIndecies])
-    # plotWaves([blinkWave, newBlinkWave], xLabels=[],
-    #           labels=["Blink", "NewBlink"])
     print(f"Blinks per minute: {len(blinks)/((endTime-startTime)/60)}")
 
     # Try again with new updated wave
@@ -114,20 +101,17 @@ for electIX in goodIndecies:
           f"detected waves.")
 
     blinks1, blinksDis1, blinkIXs1 = findBlinks(newBlinkWave, sequ, blinkDuration,
-                                     sampleHz=int(sampleRate/dwnSample),
+                                     sampleHz=sampleRate,
                                      tLabels=tLabels[startTime*1000:endTime*1000],
-                                     verbose=9, electrode=electLabels[electIX])
+                                     verbose=4, electrode=electLabels[electIX])
     blinkOutcomes[electIX]['original']['blinkWave'] = copy.deepcopy(newBlinkWave)
     blinkOutcomes[electIX]['original']['blinks'] = blinks1
     blinkOutcomes[electIX]['original']['blinksIndecies'] = blinkIXs1
     blinkOutcomes[electIX]['original']['dissimilarity'] = blinksDis1
     blinkOutcomes[electIX]['original']['duration'] = blinkDurationMS
     print(f"{len(blinks1)} Blinks per minute: {len(blinks1)/((endTime-startTime)/60)}")
-
     startIndecies = [np.where(tLabels == b)[0][0] - (startTime * 1000) for
                      b in blinks1]
-
-
     if extend:
         # EXTEND window until it alters the number of blinks discovered
         print(f"extending time window from {blinkDurationMS} by steps of {delta}ms until it alters the number of blinks...")
@@ -141,22 +125,16 @@ for electIX in goodIndecies:
             waveDuration += delta
             blinkDuration = waveDuration / sampleRate  # unit: seconds
             print(f"Considering wave duration of {waveDuration}...")
-            if dwnSample > 1:
-                sequ = [allData[electIX][x] for x in
-                        range(startTime * sampleRate, endTime * sampleRate,
-                              dwnSample)]
-            else:
-                sequ = allData[electIX][
-                       startTime * sampleRate:endTime * sampleRate]
+            sequ = allData[electIX][startTime * sampleRate:endTime * sampleRate]
 
             # Find initial blink wave as best duplicated sequence.
             blinkWaveW0 = findBlinkWave(sequ, blinkDuration,
-                                      sampleHz=int(sampleRate / dwnSample),
+                                      sampleHz=sampleRate,
                                       tLabels=tLabels[startTime * 1000:endTime * 1000],
                                       verbose=0, electrode=electLabels[electIX])
 
             blinksW0, blinkDisW0, _ = findBlinks(blinkWaveW0, sequ, blinkDuration,
-                                          sampleHz=int(sampleRate / dwnSample),
+                                          sampleHz=sampleRate,
                                           tLabels=tLabels[startTime * 1000:endTime * 1000],
                                           verbose=0, electrode=electLabels[electIX])
 
@@ -171,7 +149,7 @@ for electIX in goodIndecies:
             print(f"Repeat blink discovery with wave generated from {len(blinksW0)} "
                   f"detected waves.")
             blinksW2, blinkDisW2, blinksIXsW2 = findBlinks(newBlinkWave, sequ, blinkDuration,
-                                            sampleHz=int(sampleRate / dwnSample),
+                                            sampleHz=sampleRate,
                                             tLabels=tLabels[startTime * 1000: endTime * 1000],
                                             verbose=3, electrode=electLabels[electIX])
             print(f"{len(blinksW2)} Blinks per minute: {len(blinksW2)/((endTime-startTime)/60)}")
@@ -204,16 +182,112 @@ else:
               title=f"Final wave(s) {blinkDurationMS}ms with "
                     f"{', '.join([str(len(blinkOutcomes[k]['original']['blinks'])) for k in blinkOutcomes.keys()])} blinks"
                     f" on {', '.join(goodChannels)}")
-    eeg = []
+    startIX = startTime * sampleRate
+    endIX = endTime * sampleRate
+    if len(goodIndecies) == 1:
+        electIX = goodIndecies[0]
+        plotMotifMatches(allData[electIX][startIX:endIX], blinkOutcomes[electIX]['original']['blinksIndecies'],
+                         waveDuration,
+                         title=f'Motif Match (Electrode {electLabels[electIX]})')
+    else:
+        eeg = []
+        for electIX in goodIndecies:
+            eeg.append(allData[electIX][startIX:endIX])
+        patches = [blinkOutcomes[electIX]['original']['blinksIndecies'] for electIX in goodIndecies]
+        AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
+        plotMotifMatchesMultiElectrodes(eeg, tLabels[startTime*1000:endTime*1000], patches, waveDuration,
+                                        title="All electrodes All waves '", electrodes=AllBlinks)
     for electIX in goodIndecies:
-        if dwnSample > 1:
-            eeg.append([allData[electIX][x] for x in range(startTime * sampleRate, endTime * sampleRate, dwnSample)])
-        else:
-            eeg.append(allData[electIX][startTime * sampleRate:endTime * sampleRate])
-    patches = [blinkOutcomes[electIX]['original']['blinksIndecies'] for electIX in goodIndecies]
-    AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
-    plotMotifMatchesMultiElectrodes(eeg, tLabels[startTime*1000:endTime*1000], patches, waveDuration,
-                                    title="All electrodes All waves", electrodes=AllBlinks)
-    for electIX in goodIndecies:
-        print(f"{electIX}: {blinkOutcomes[electIX]['original']['blinks']}")
+        print(f"{electLabels[electIX]} ({len(blinkOutcomes[electIX]['original']['blinks'])}): "
+              f"{blinkOutcomes[electIX]['original']['blinks']}")
+
+plotSynchedMeanWaves([allData[electIX][startIX:endIX] for electIX in goodIndecies],
+         tLabels[startIX:endIX], [blinkOutcomes[electIX]['original']['blinksIndecies'] for electIX in goodIndecies],
+                     waveDuration, title="ignored",
+                     electrodes=[electLabels[electIX] for electIX in goodIndecies])
+if goBig:
+    ### apply wave detection to full range of data
+    print("Going Big (longer timeline)")
+    print(f"Data time range is from 0 to {int(len(tLabels)/sampleRate)} seconds")
+    timeString = input("Provide a start time in seconds (default: 707):")
+    if len(timeString) < 1:
+        timeString = '707'
+    startTime = int(timeString)
+    timeString = input("Provide a end time in seconds (default: 721):")
+    if len(timeString) < 1:
+        timeString = '721'
+    endTime = int(timeString)
+
+    print("Generating plot of electrode signal(s)")
+    startIX = startTime * sampleRate
+    endIX = endTime * sampleRate
+    cleanData = [zeroOutOfRange(allData[electIX][startIX:endIX]) for electIX in goodIndecies]
+    plotEEGs([cleanData[ix] for ix, electIX in enumerate(goodIndecies)],
+             tLabels[startIX:endIX],
+             [electLabels[electIX] for electIX in goodIndecies])
+
+    for ix, electIX in enumerate(goodIndecies):
+        sequ = np.array(cleanData[ix], dtype=np.float64)
+        blinksBig, blinksDisBig, blinkIXsBig = findBlinks(blinkOutcomes[electIX]['original']['blinkWave'],
+                                                sequ, blinkDuration,
+                                     sampleHz=sampleRate,
+                                     tLabels=tLabels[startIX:endIX],
+                                     verbose=7, electrode=electLabels[electIX])
+        blinkOutcomes[electIX]['Big']['blinkWave'] = copy.deepcopy(blinkOutcomes[electIX]['original']['blinkWave'])
+        blinkOutcomes[electIX]['Big']['blinks'] = blinksBig
+        blinkOutcomes[electIX]['Big']['blinksIndecies'] = blinkIXsBig
+        blinkOutcomes[electIX]['Big']['dissimilarity'] = blinksDisBig
+        blinkOutcomes[electIX]['Big']['duration'] = blinkDurationMS
+        print(f"{len(blinksBig)} Blinks per minute: {len(blinksBig)/((endTime-startTime)/60)}")
+    if len(goodIndecies) == 1:
+        electIX = goodIndecies[0]
+        plotMotifMatches(cleanData[0], blinkOutcomes[electIX]['Big']['blinksIndecies'],
+                         waveDuration,
+                         title=f'Motif Match (Electrode {electLabels[electIX]})')
+    else:
+        eeg = []
+        for ix, electIX in enumerate(goodIndecies):
+            eeg.append(cleanData[ix])
+        patches = [blinkOutcomes[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies]
+        AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
+        plotMotifMatchesMultiElectrodes(eeg, tLabels[startIX:endIX], patches, waveDuration,
+                                        title="All electrodes All waves ''", electrodes=AllBlinks)
+        for electIX in goodIndecies:
+            print(f"{electLabels[electIX]}: {blinkOutcomes[electIX]['Big']['blinks']}")
+        waveRespMetrics = plotSynchedMeanWaves([allData[electIX][startIX:endIX] for electIX in goodIndecies],
+                             tLabels[startIX:endIX],
+                             [blinkOutcomes[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies],
+                             waveDuration, title="ignored",
+                             electrodes=[electLabels[electIX] for electIX in goodIndecies])
+
+
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import mne
+montage = mne.channels.make_standard_montage('GSN-HydroCel-129')
+montage.ch_names[-1] = 'E129'
+testRaw.set_montage(montage,match_case=False)
+ignoreChannels = [x for x in montage.ch_names if x not in goodChannels]
+ignoreIndecies = [electLabels.index(x) for x in ignoreChannels]
+
+waveRespMetrics.sort(key=lambda x:(x[4] - x[1]))
+print(f"waveRespMetrics: {waveRespMetrics}")
+sensorIndeciesVals = dict({int(w[0][1:])-1: w[4]-w[1] for w in waveRespMetrics})
+fig = plt.figure()
+ax2d = fig.add_subplot()
+chCategories = [ignoreIndecies]
+for ch in sensorIndeciesVals.keys():
+    chCategories.append([ch])
+
+mne.viz.plot_sensors(testRaw.info, ch_type="eeg",
+                     axes=ax2d, ch_groups=chCategories,
+                     cmap=cm.cool,linewidth=0,pointsize=50,
+                     show_names=False,
+                     kind="topomap",
+                     to_sphere=True)
+print("Add colorbar key")
+print("representation is color sorted not proportional to values.")
+print("Figure out how to update by value instead of sorted position.")
+
+
 print("done")
