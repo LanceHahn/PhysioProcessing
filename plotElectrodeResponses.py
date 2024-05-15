@@ -6,19 +6,19 @@ import numpy as np
 from blinkDection import (findBlinkWave, findBlinks, combineWaves, plotWaves, zeroOutOfRange,
                           plotMotifMatchesMultiElectrodes, plotEEGs, plotMotifMatches,
                           plotSynchedMeanWaves)
-def get_username():
-    return pwd.getpwuid(os.getuid())[0]
+# def get_username():
+#     return pwd.getpwuid(os.getuid())[0]
 
-if get_username() == 'lance':
-    basePath = '/Users/lance/Documents/GitHub/mne-python/'
-    fnameSet = 'data/filtered and epoched not baseline corrected/ACL_035_filt_epoch_nobase.set'
-    fnameSetFiltered = 'data/filtered/ACL_035_filt.set'
-    fnameSetRaw = 'data/raw/ACL_035_raw.set'
-else:
-    basePath = '/Users/add32662/OneDrive - Western Kentucky University/Pycharm/mne-python-main/'
-    fnameSet = 'mne/data/filtered and epoched not baseline corrected/ACL_035_filt_epoch_nobase.set'
-    fnameSetFiltered = 'mne/data/filtered/ACL_035_filt.set'
-    fnameSetRaw = 'mne/data/raw/ACL_035_raw.set'
+#if get_username() == 'lance':
+    #basePath = '/Users/lance/Documents/GitHub/mne-python/'
+    #fnameSet = 'data/filtered and epoched not baseline corrected/ACL_035_filt_epoch_nobase.set'
+    #fnameSetFiltered = 'data/filtered/ACL_035_filt.set'
+fnameSetRaw = 'data/raw/ACL_035_raw.set'
+# else:
+#     #basePath = '/Users/add32662/OneDrive - Western Kentucky University/Pycharm/mne-python-main/'
+#     #fnameSet = 'mne/data/filtered and epoched not baseline corrected/ACL_035_filt_epoch_nobase.set'
+#     #fnameSetFiltered = 'mne/data/filtered/ACL_035_filt.set'
+#     fnameSetRaw = 'mne/data/raw/ACL_035_raw.set'
 
 
 testRaw = read_raw_eeglab(input_fname=fnameSetRaw)
@@ -34,11 +34,20 @@ sampleRate = 1000
 channelString = input("Provide a space-delimited list of channel numbers (defaulty 14): ")
 if len(channelString) < 1:
     channelString = '14'
-goodChannels = channelString.split(' ')
-goodChannels = ["E" + ch for ch in goodChannels]
+AllElect = False
+if 'ALL' in channelString.upper():
+    AllElect = True
+    goodChannels = channelString.split(' ')
+    goodChannels = ["E" + ch for ch in goodChannels if ch.upper() != 'ALL']
+    channelString = input("Provide a space-delimited list of BAD channel numbers (default 44): ")
+    if len(channelString) < 1:
+        channelString = '44'
+    badChannels = ["E" + ch for ch in channelString.split(' ')]
+    goodChannels.extend([e for e in electLabels if e not in goodChannels and e not in badChannels])
+else:
+    goodChannels = channelString.split(' ')
+    goodChannels = ["E" + ch for ch in goodChannels]
 goodIndecies = [electLabels.index(x) for x in goodChannels]
-startTime = int(60 * 21)
-endTime = int(60 * 22)
 sampleRate = 1000
 blinkDurationMS = 300  # 150
 waveDuration = blinkDurationMS
@@ -61,9 +70,10 @@ endTime = int(timeString)
 print("Generating plot of electrode signal(s)")
 startIX = startTime * sampleRate
 endIX = endTime * sampleRate
-plotEEGs([allData[electIX][startIX:endIX] for electIX in goodIndecies],
-         tLabels[startIX:endIX],
-         [electLabels[electIX] for electIX in goodIndecies])
+if not AllElect:
+    plotEEGs([allData[electIX][startIX:endIX] for electIX in goodIndecies],
+             tLabels[startIX:endIX],
+             [electLabels[electIX] for electIX in goodIndecies])
 
 interBlink = 60 / 12  # 12 times per minute unit: seconds
 
@@ -85,12 +95,12 @@ for electIX in goodIndecies:
     blinkWave = findBlinkWave(sequ, blinkDuration,
                               sampleHz=sampleRate,
                               tLabels=tLabels[startTime*1000:endTime*1000],
-                              verbose=2, electrode=electLabels[electIX])
+                              verbose=2 if not AllElect else 0, electrode=electLabels[electIX])
 
     blinks, blinkDis, _ = findBlinks(blinkWave, sequ, blinkDuration,
                         sampleHz=sampleRate,
                         tLabels=tLabels[startTime*1000:endTime*1000],
-                        verbose=3, electrode=electLabels[electIX])
+                        verbose=3 if not AllElect else 0, electrode=electLabels[electIX])
     startIndecies = [np.where(tLabels == b)[0][0] - (startTime*1000) for b in blinks]
     newBlinkWave = combineWaves([sequ[start: start + blinkDurationMS]
                                  for start in startIndecies])
@@ -103,7 +113,7 @@ for electIX in goodIndecies:
     blinks1, blinksDis1, blinkIXs1 = findBlinks(newBlinkWave, sequ, blinkDuration,
                                      sampleHz=sampleRate,
                                      tLabels=tLabels[startTime*1000:endTime*1000],
-                                     verbose=4, electrode=electLabels[electIX])
+                                     verbose=4 if not AllElect else 0, electrode=electLabels[electIX])
     blinkOutcomes[electIX]['original']['blinkWave'] = copy.deepcopy(newBlinkWave)
     blinkOutcomes[electIX]['original']['blinks'] = blinks1
     blinkOutcomes[electIX]['original']['blinksIndecies'] = blinkIXs1
@@ -151,7 +161,7 @@ for electIX in goodIndecies:
             blinksW2, blinkDisW2, blinksIXsW2 = findBlinks(newBlinkWave, sequ, blinkDuration,
                                             sampleHz=sampleRate,
                                             tLabels=tLabels[startTime * 1000: endTime * 1000],
-                                            verbose=3, electrode=electLabels[electIX])
+                                            verbose=3 if not AllElect else 0, electrode=electLabels[electIX])
             print(f"{len(blinksW2)} Blinks per minute: {len(blinksW2)/((endTime-startTime)/60)}")
             blinkCount = len(blinksW2)
             if blinkCount == expectedBlinks:
@@ -161,15 +171,17 @@ for electIX in goodIndecies:
                 blinkOutcomes[electIX]['extended']['blinkWave'] = copy.deepcopy(newBlinkWave)
                 blinkOutcomes[electIX]['extended']['duration'] = waveDuration
         waveDuration -= delta
-        plotWaves([blinkOutcomes[electIX]['extended']['blinkWave']], xLabels=[],
-                  labels=[f'blink on {goodChannels[goodIndecies.index(electIX)]}'],
-                  title=f"Extended wave {waveDuration} with {len(blinkOutcomes[electIX]['extended']['blinks'])} blinks"
-                        f" on {goodChannels[goodIndecies.index(electIX)]}")
+        if not AllElect:
+            plotWaves([blinkOutcomes[electIX]['extended']['blinkWave']], xLabels=[],
+                      labels=[f'blink on {goodChannels[goodIndecies.index(electIX)]}'],
+                      title=f"Extended wave {waveDuration} with {len(blinkOutcomes[electIX]['extended']['blinks'])} blinks"
+                            f" on {goodChannels[goodIndecies.index(electIX)]}")
     else:
-        plotWaves([blinkOutcomes[electIX]['original']['blinkWave']], xLabels=[],
-                  labels=[f'blink on {goodChannels[goodIndecies.index(electIX)]}'],
-                  title=f"Final wave {waveDuration} with {len(blinkOutcomes[electIX]['original']['blinks'])} blinks"
-                        f" on {goodChannels[goodIndecies.index(electIX)]}")
+        if not AllElect:
+            plotWaves([blinkOutcomes[electIX]['original']['blinkWave']], xLabels=[],
+                      labels=[f'blink on {goodChannels[goodIndecies.index(electIX)]}'],
+                      title=f"Final wave {waveDuration} with {len(blinkOutcomes[electIX]['original']['blinks'])} blinks"
+                            f" on {goodChannels[goodIndecies.index(electIX)]}")
 if extend:
     plotWaves([blinkOutcomes[ix]['extended']['blinkWave'] for ix in goodIndecies], xLabels=[],
               labels=goodChannels,
@@ -190,19 +202,21 @@ else:
                          waveDuration,
                          title=f'Motif Match (Electrode {electLabels[electIX]})')
     else:
-        eeg = []
-        for electIX in goodIndecies:
-            eeg.append(allData[electIX][startIX:endIX])
-        patches = [blinkOutcomes[electIX]['original']['blinksIndecies'] for electIX in goodIndecies]
-        AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
-        plotMotifMatchesMultiElectrodes(eeg, tLabels[startTime*1000:endTime*1000], patches, waveDuration,
-                                        title="All electrodes All waves '", electrodes=AllBlinks)
+        if not AllElect:
+            eeg = []
+            for electIX in goodIndecies:
+                eeg.append(allData[electIX][startIX:endIX])
+            patches = [blinkOutcomes[electIX]['original']['blinksIndecies'] for electIX in goodIndecies]
+            AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
+            plotMotifMatchesMultiElectrodes(eeg, tLabels[startTime*1000:endTime*1000], patches, waveDuration,
+                                            title="All electrodes All waves '", electrodes=AllBlinks)
     for electIX in goodIndecies:
         print(f"{electLabels[electIX]} ({len(blinkOutcomes[electIX]['original']['blinks'])}): "
               f"{blinkOutcomes[electIX]['original']['blinks']}")
 
 plotSynchedMeanWaves([allData[electIX][startIX:endIX] for electIX in goodIndecies],
-         tLabels[startIX:endIX], [blinkOutcomes[electIX]['original']['blinksIndecies'] for electIX in goodIndecies],
+                     tLabels[startIX:endIX],
+                     [blinkOutcomes[electIX]['original']['blinksIndecies'] for electIX in goodIndecies],
                      waveDuration, title="ignored",
                      electrodes=[electLabels[electIX] for electIX in goodIndecies])
 if goBig:
@@ -222,9 +236,10 @@ if goBig:
     startIX = startTime * sampleRate
     endIX = endTime * sampleRate
     cleanData = [zeroOutOfRange(allData[electIX][startIX:endIX]) for electIX in goodIndecies]
-    plotEEGs([cleanData[ix] for ix, electIX in enumerate(goodIndecies)],
-             tLabels[startIX:endIX],
-             [electLabels[electIX] for electIX in goodIndecies])
+    if not AllElect:
+        plotEEGs([cleanData[ix] for ix, electIX in enumerate(goodIndecies)],
+                 tLabels[startIX:endIX],
+                 [electLabels[electIX] for electIX in goodIndecies])
 
     for ix, electIX in enumerate(goodIndecies):
         sequ = np.array(cleanData[ix], dtype=np.float64)
@@ -232,7 +247,7 @@ if goBig:
                                                 sequ, blinkDuration,
                                      sampleHz=sampleRate,
                                      tLabels=tLabels[startIX:endIX],
-                                     verbose=7, electrode=electLabels[electIX])
+                                     verbose=7 if not AllElect else 0, electrode=electLabels[electIX])
         blinkOutcomes[electIX]['Big']['blinkWave'] = copy.deepcopy(blinkOutcomes[electIX]['original']['blinkWave'])
         blinkOutcomes[electIX]['Big']['blinks'] = blinksBig
         blinkOutcomes[electIX]['Big']['blinksIndecies'] = blinkIXsBig
@@ -245,13 +260,14 @@ if goBig:
                          waveDuration,
                          title=f'Motif Match (Electrode {electLabels[electIX]})')
     else:
-        eeg = []
-        for ix, electIX in enumerate(goodIndecies):
-            eeg.append(cleanData[ix])
-        patches = [blinkOutcomes[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies]
-        AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
-        plotMotifMatchesMultiElectrodes(eeg, tLabels[startIX:endIX], patches, waveDuration,
-                                        title="All electrodes All waves ''", electrodes=AllBlinks)
+        if not AllElect:
+            eeg = []
+            for ix, electIX in enumerate(goodIndecies):
+                eeg.append(cleanData[ix])
+            patches = [blinkOutcomes[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies]
+            AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
+            plotMotifMatchesMultiElectrodes(eeg, tLabels[startIX:endIX], patches, waveDuration,
+                                            title="All electrodes All waves ''", electrodes=AllBlinks)
         for electIX in goodIndecies:
             print(f"{electLabels[electIX]}: {blinkOutcomes[electIX]['Big']['blinks']}")
         waveRespMetrics = plotSynchedMeanWaves([allData[electIX][startIX:endIX] for electIX in goodIndecies],
@@ -263,6 +279,7 @@ if goBig:
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+from matplotlib import colors
 import mne
 montage = mne.channels.make_standard_montage('GSN-HydroCel-129')
 montage.ch_names[-1] = 'E129'
@@ -273,19 +290,33 @@ ignoreIndecies = [electLabels.index(x) for x in ignoreChannels]
 waveRespMetrics.sort(key=lambda x:(x[4] - x[1]))
 print(f"waveRespMetrics: {waveRespMetrics}")
 sensorIndeciesVals = dict({int(w[0][1:])-1: w[4]-w[1] for w in waveRespMetrics})
-fig = plt.figure()
-ax2d = fig.add_subplot()
+
 chCategories = [ignoreIndecies]
 for ch in sensorIndeciesVals.keys():
     chCategories.append([ch])
-
-mne.viz.plot_sensors(testRaw.info, ch_type="eeg",
-                     axes=ax2d, ch_groups=chCategories,
-                     cmap=cm.cool,linewidth=0,pointsize=50,
-                     show_names=False,
-                     kind="topomap",
-                     to_sphere=True)
+# fig = plt.figure()
+# ax2d = fig.add_subplot()
+# mne.viz.plot_sensors(testRaw.info, ch_type="eeg",
+#                      axes=ax2d, ch_groups=chCategories,
+#                      cmap=cm.cool,linewidth=0,pointsize=50,
+#                      show_names=False,
+#                      kind="topomap",
+#                      to_sphere=True)
 print("Add colorbar key")
+cmapf = cm.cool
+resMaxDiff = max(x[4]-x[1] for x in waveRespMetrics)
+resMinDiff = min(x[4]-x[1] for x in waveRespMetrics)
+norm = colors.Normalize(vmin=resMinDiff, vmax=resMaxDiff)
+sm = cm.ScalarMappable(cmap=cmapf, norm=norm)
+fig3, ax = plt.subplots()
+uu = mne.viz.plot_sensors(testRaw.info, ch_type="eeg",
+                          axes=ax, ch_groups=chCategories,
+                          cmap=cm.cool, linewidth=0, pointsize=50,
+                          show_names=False,
+                          kind="topomap",
+                          to_sphere=True, show=False)
+cbar = uu.colorbar(sm, ax=ax)
+uu.show()
 print("representation is color sorted not proportional to values.")
 print("Figure out how to update by value instead of sorted position.")
 
