@@ -7,6 +7,13 @@ COLOR_LIST = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple',
 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']
 
 def plotEEGs(eegData, tLabels, eLabels):
+    """
+    plot a series of eeg electrode traces.
+    :param eegData: a list of lists of electrode measurements
+    :param tLabels: a list of floating point numbers indicating time
+    :param eLabels: list of electrode label strings
+    :return:
+    """
     base = 0.0
     maxReal = 0.01
     for ix in range(len(eLabels)):
@@ -107,9 +114,11 @@ def plotMotifMatches(vData, indecies, wwidth, title=None):
     plt.show()
     return
 
-def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None, electrodes=None):
+def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
+                         electrodes=None, sortSize=True):
     """
-
+    Show the collection of averaged events for each electrode as a
+    normalized plot and as a zeroed plot.
     :param vData: list of eeg data for each electrode
     :param tLabels: time labels for eeg data
     :param indecies: index of blink beginning for each electrode
@@ -138,6 +147,10 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None, electrode
                     # If the common window doesn't completely engulf the blink then
                     # extend either the beginning or the end (delta)
                     print(f"#{1+binnedCount[eIX]} {eIX}:{bIX}:{comIX}:{commonStarts[comIX] - commonPreWidth} < ({bIX} ,{bIX + wwidth}) < {commonStarts[comIX] + commonWwidth}")
+                    if commonPreWidth + commonWwidth > 1.5 * wwidth:
+                        #print(f"Not extending due to expansion guardrails ({commonPreWidth} + {commonWwidth} > 1.5 * {wwidth}")
+                        blinkAdded = False
+                        break
                     # expand the preceding boundary if appropriate
                     if 0 < (commonStarts[comIX] - commonPreWidth) - bIX < minOverlap:
                         print(f"{eIX}:{bIX}:{comIX}:START {commonStarts[comIX] - commonPreWidth}  > {bIX}: ({commonPreWidth} , {commonWwidth}) -> ", end="")
@@ -159,6 +172,10 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None, electrode
     window = np.ones(5)
     waveMaxes = []
     timeLabels = tLabels[commonStarts[0] - commonPreWidth:commonStarts[0] + commonWwidth]
+    print(f"The {len(commonStarts)} temporal windows used:")
+    for comIX in range(len(commonStarts)):
+        print(f"{comIX+1}:{tLabels[commonStarts[comIX] - commonPreWidth]}:{tLabels[commonStarts[comIX] + commonWwidth]}")
+
     print("Electrode, Starting val, Max (t), index, max found by conv, max conv")
     for eIX in range(eleCount):
         synchWaves.append(np.mean([vData[eIX][commonStarts[comIX] - commonPreWidth:commonStarts[comIX] + commonWwidth]
@@ -166,10 +183,14 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None, electrode
         ixMax = np.argmax(np.convolve(window, synchWaves[-1], mode='valid'))
         waveMaxes.append((electrodes[eIX], synchWaves[-1][0], timeLabels[ixMax], ixMax, synchWaves[-1][ixMax], np.convolve(window, synchWaves[-1], mode='valid')[ixMax]))
         print(f"{','.join(str(w) for w in waveMaxes[-1])}")
-    plotWaves(synchWaves, xLabels=timeLabels, labels=electrodes,
+    pos = [(ix, bb) for ix, bb in enumerate(synchWaves)]
+    if sortSize:
+        pos.sort(key=lambda x:-(np.max(x[1])-x[1][0]))
+    posi = [p[0] for p in pos]
+    plotWaves([synchWaves[p] for p in posi], xLabels=timeLabels, labels=[electrodes[p] for p in posi],
               zNorm=True, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Normed Waves")
-    plotWaves([[v-syn[0] for v in syn] for syn in synchWaves],
-              xLabels=timeLabels, labels=electrodes,
+    plotWaves([[v-syn[0] for v in syn] for syn in [synchWaves[p] for p in posi]],
+              xLabels=timeLabels, labels=[electrodes[p] for p in posi],
               zNorm=False, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Zeroed Waves")
 
     return waveMaxes
