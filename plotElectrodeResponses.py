@@ -1,26 +1,24 @@
 import copy
-import os
-import pwd
 from mne.io.eeglab import read_raw_eeglab, read_epochs_eeglab
 import numpy as np
 from blinkDection import (findBlinkWave, findBlinks, combineWaves, plotWaves, zeroOutOfRange,
                           plotMotifMatchesMultiElectrodes, plotEEGs, plotMotifMatches,
                           plotSynchedMeanWaves)
-# def get_username():
-#     return pwd.getpwuid(os.getuid())[0]
 
-#if get_username() == 'lance':
-    #basePath = '/Users/lance/Documents/GitHub/mne-python/'
-    #fnameSet = 'data/filtered and epoched not baseline corrected/ACL_035_filt_epoch_nobase.set'
-    #fnameSetFiltered = 'data/filtered/ACL_035_filt.set'
+def stratifyForColors(chVals, ignores, binCount, mn, mx,
+                      ignoreVal):
+    valueList = [[] for i in range(binCount)]
+    rng = mx - mn
+    binCnt = binCount - 1
+    for chL, chV in chVals.items():
+        binIX = int(((chV-mn)*binCnt/rng))
+        valueList[binIX].append(chL)
+    for chL in ignores:
+        binIX = int(((ignoreVal-mn)*binCnt/rng))
+        valueList[binIX].append(chL)
+    return valueList
+
 fnameSetRaw = 'data/raw/ACL_035_raw.set'
-# else:
-#     #basePath = '/Users/add32662/OneDrive - Western Kentucky University/Pycharm/mne-python-main/'
-#     #fnameSet = 'mne/data/filtered and epoched not baseline corrected/ACL_035_filt_epoch_nobase.set'
-#     #fnameSetFiltered = 'mne/data/filtered/ACL_035_filt.set'
-#     fnameSetRaw = 'mne/data/raw/ACL_035_raw.set'
-
-
 testRaw = read_raw_eeglab(input_fname=fnameSetRaw)
 
 allData = testRaw.get_data()
@@ -283,7 +281,7 @@ from matplotlib import colors
 import mne
 montage = mne.channels.make_standard_montage('GSN-HydroCel-129')
 montage.ch_names[-1] = 'E129'
-testRaw.set_montage(montage,match_case=False)
+testRaw.set_montage(montage, match_case=False)
 ignoreChannels = [x for x in montage.ch_names if x not in goodChannels]
 ignoreIndecies = [electLabels.index(x) for x in ignoreChannels]
 
@@ -291,9 +289,17 @@ waveRespMetrics.sort(key=lambda x:(x[4] - x[1]))
 print(f"waveRespMetrics: {waveRespMetrics}")
 sensorIndeciesVals = dict({int(w[0][1:])-1: w[4]-w[1] for w in waveRespMetrics})
 
-chCategories = [ignoreIndecies]
-for ch in sensorIndeciesVals.keys():
-    chCategories.append([ch])
+cmapf = cm.cool
+
+resMaxDiff = max(x[4]-x[1] for x in waveRespMetrics)
+resMinDiff = min(x[4]-x[1] for x in waveRespMetrics)
+chCategories = stratifyForColors(sensorIndeciesVals, ignores=ignoreIndecies,
+                                 binCount=cmapf.N, mn=resMinDiff, mx=resMaxDiff,
+                                 ignoreVal=resMinDiff)
+# chCategories = [ignoreIndecies]
+# for ch in sensorIndeciesVals.keys():
+#     chCategories.append([ch])
+
 # fig = plt.figure()
 # ax2d = fig.add_subplot()
 # mne.viz.plot_sensors(testRaw.info, ch_type="eeg",
@@ -303,9 +309,6 @@ for ch in sensorIndeciesVals.keys():
 #                      kind="topomap",
 #                      to_sphere=True)
 print("Add colorbar key")
-cmapf = cm.cool
-resMaxDiff = max(x[4]-x[1] for x in waveRespMetrics)
-resMinDiff = min(x[4]-x[1] for x in waveRespMetrics)
 norm = colors.Normalize(vmin=resMinDiff, vmax=resMaxDiff)
 sm = cm.ScalarMappable(cmap=cmapf, norm=norm)
 fig3, ax = plt.subplots()
