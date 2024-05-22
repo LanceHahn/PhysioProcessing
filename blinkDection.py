@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 COLOR_LIST = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple',
 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']
+MAX_REAL = 0.01  # threshold value for determining a channel value is invalid
 
 def plotEEGs(eegData, tLabels, eLabels):
     """
@@ -15,19 +16,19 @@ def plotEEGs(eegData, tLabels, eLabels):
     :return:
     """
     base = 0.0
-    maxReal = 0.01
+    offset = -0.0003
     for ix in range(len(eLabels)):
         print(f"{eLabels[ix]} ", end="")
-        adjusted = [x if x < maxReal else maxReal for x in eegData[ix]]
+        adjusted = [x if x < MAX_REAL else MAX_REAL for x in eegData[ix]]
         if None in adjusted:
-            print(f"Unreal (over {maxReal}) values found.")
-            print(f"Bad values: {[(ix, val) for ix, val  in enumerate(eegData[ix]) if val >= maxReal]}")
-        maxV = min(max(adjusted), maxReal)
-        minV = max(min(adjusted), -maxReal)
-        adjusted = [x - maxV + base if x < maxReal else None for x in
+            print(f"Unreal (over {MAX_REAL}) values found.")
+            print(f"Bad values: {[(ix, val) for ix, val  in enumerate(eegData[ix]) if val >= MAX_REAL]}")
+        maxV = min(max(adjusted), MAX_REAL)
+        minV = max(min(adjusted), -MAX_REAL)
+        adjusted = [x - maxV + base if x < MAX_REAL else None for x in
                     eegData[ix]]
         plt.plot(tLabels, adjusted, label=eLabels[ix])
-        base += -0.0003 + minV - maxV
+        base += offset + minV - maxV
     plt.title('initial EEG plot')
     plt.legend()
     plt.show()
@@ -36,9 +37,19 @@ def plotEEGs(eegData, tLabels, eLabels):
 
 def plotMotifDiscovery(timeLabels, vData, distData, targetIX, matchIX, wwidth,
                        title='Motif (Pattern) Discovery'):
-
-    # Plot the original wave form with colorful patches highlighting the detected pattern
-    # and the matrix profile distance values with the lowest distance pair highlighted
+    """
+    Plot the original wave form with colorful patches highlighting the detected
+    pattern and the matrix profile distance values with the lowest distance
+    pair highlighted
+    :param timeLabels:
+    :param vData:
+    :param distData:
+    :param targetIX:
+    :param matchIX:
+    :param wwidth:
+    :param title:
+    :return:
+    """
     vMax = max(vData)
     vMin = min(vData)
     height = vMax - vMin
@@ -114,7 +125,7 @@ def plotMotifMatches(vData, indecies, wwidth, title=None):
     plt.show()
     return
 
-def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
+def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth,
                          electrodes=None, sortSize=True):
     """
     Show the collection of averaged events for each electrode as a
@@ -128,8 +139,6 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
     :return: None
     """
     eleCount = len(indecies)
-    if title is None:
-        title = f"All {len(indecies)} electrodes SYNCHED Averaged waves"
 
     # Identify common windows for each blink
     commonStarts = indecies[0]
@@ -148,18 +157,15 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
                     # extend either the beginning or the end (delta)
                     print(f"#{1+binnedCount[eIX]} {eIX}:{bIX}:{comIX}:{commonStarts[comIX] - commonPreWidth} < ({bIX} ,{bIX + wwidth}) < {commonStarts[comIX] + commonWwidth}")
                     if commonPreWidth + commonWwidth > 1.5 * wwidth:
-                        #print(f"Not extending due to expansion guardrails ({commonPreWidth} + {commonWwidth} > 1.5 * {wwidth}")
+                        # don't extending window range because the expansion
+                        # guardrails suggest this is too extreme
                         blinkAdded = False
                         break
                     # expand the preceding boundary if appropriate
                     if 0 < (commonStarts[comIX] - commonPreWidth) - bIX < minOverlap:
-                        print(f"{eIX}:{bIX}:{comIX}:START {commonStarts[comIX] - commonPreWidth}  > {bIX}: ({commonPreWidth} , {commonWwidth}) -> ", end="")
                         commonPreWidth += (commonStarts[comIX] - commonPreWidth) - bIX
-                        print(f"({commonPreWidth} , {commonWwidth})")
                     if 0 < (bIX + wwidth) - (commonStarts[comIX] + commonWwidth) < minOverlap:
-                        print(f"{eIX}:{bIX}:{comIX}:DELTA {commonStarts[comIX] + commonWwidth}  < {bIX + wwidth}: ({commonPreWidth} , {commonWwidth}) -> ", end="")
                         commonWwidth += (bIX + wwidth) - (commonStarts[comIX] + commonWwidth)
-                        print(f"({commonPreWidth} , {commonWwidth})")
                     blinkAdded = True
                     binnedCount[eIX] += 1
                     break
@@ -167,6 +173,7 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
                 blinkAdded = False
                 continue
         print(f"{binnedCount[eIX]} of {len(indecies[eIX])} ({int(binnedCount[eIX]/len(indecies[eIX])*100)}%) binned ({len(commonStarts)} bins)")
+
     # create an average signal for each electrode over the common windows
     synchWaves = []
     window = np.ones(5)
@@ -183,12 +190,20 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
         ixMax = np.argmax(np.convolve(window, synchWaves[-1], mode='valid'))
         waveMaxes.append((electrodes[eIX], synchWaves[-1][0], timeLabels[ixMax], ixMax, synchWaves[-1][ixMax], np.convolve(window, synchWaves[-1], mode='valid')[ixMax]))
         print(f"{','.join(str(w) for w in waveMaxes[-1])}")
+
+    # Create a list of electrode positions ordered from largest positive
+    # diversion to largest negative diversion
     pos = [(ix, bb) for ix, bb in enumerate(synchWaves)]
     if sortSize:
         pos.sort(key=lambda x:-(np.max(x[1])-x[1][0]))
     posi = [p[0] for p in pos]
-    plotWaves([synchWaves[p] for p in posi], xLabels=timeLabels, labels=[electrodes[p] for p in posi],
-              zNorm=True, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Normed Waves")
+
+    # Plot sychronized waves with normalized values.
+    # plotWaves([synchWaves[p] for p in posi], xLabels=timeLabels, labels=[electrodes[p] for p in posi],
+    #           zNorm=True, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Normed Waves")
+
+    # Plot sychronized waves with values shifted vertically so that they all start
+    # at the same 0 y-coordinate.
     plotWaves([[v-syn[0] for v in syn] for syn in [synchWaves[p] for p in posi]],
               xLabels=timeLabels, labels=[electrodes[p] for p in posi],
               zNorm=False, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Zeroed Waves")
