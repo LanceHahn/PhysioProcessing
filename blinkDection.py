@@ -3,8 +3,14 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+import matplotlib.cm as cm
+from matplotlib import colors
+
+from mne.channels import make_standard_montage
+from mne.viz import plot_sensors
 COLOR_LIST = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple',
 'tab:brown', 'tab:pink', 'tab:gray', 'tab:olive', 'tab:cyan']
+MAX_REAL = 0.01  # threshold value for determining a channel value is invalid
 
 def plotEEGs(eegData, tLabels, eLabels):
     """
@@ -15,19 +21,19 @@ def plotEEGs(eegData, tLabels, eLabels):
     :return:
     """
     base = 0.0
-    maxReal = 0.01
+    offset = -0.0003
     for ix in range(len(eLabels)):
         print(f"{eLabels[ix]} ", end="")
-        adjusted = [x if x < maxReal else maxReal for x in eegData[ix]]
+        adjusted = [x if x < MAX_REAL else MAX_REAL for x in eegData[ix]]
         if None in adjusted:
-            print(f"Unreal (over {maxReal}) values found.")
-            print(f"Bad values: {[(ix, val) for ix, val  in enumerate(eegData[ix]) if val >= maxReal]}")
-        maxV = min(max(adjusted), maxReal)
-        minV = max(min(adjusted), -maxReal)
-        adjusted = [x - maxV + base if x < maxReal else None for x in
+            print(f"Unreal (over {MAX_REAL}) values found.")
+            print(f"Bad values: {[(ix, val) for ix, val  in enumerate(eegData[ix]) if val >= MAX_REAL]}")
+        maxV = min(max(adjusted), MAX_REAL)
+        minV = max(min(adjusted), -MAX_REAL)
+        adjusted = [x - maxV + base if x < MAX_REAL else None for x in
                     eegData[ix]]
         plt.plot(tLabels, adjusted, label=eLabels[ix])
-        base += -0.0003 + minV - maxV
+        base += offset + minV - maxV
     plt.title('initial EEG plot')
     plt.legend()
     plt.show()
@@ -36,9 +42,19 @@ def plotEEGs(eegData, tLabels, eLabels):
 
 def plotMotifDiscovery(timeLabels, vData, distData, targetIX, matchIX, wwidth,
                        title='Motif (Pattern) Discovery'):
-
-    # Plot the original wave form with colorful patches highlighting the detected pattern
-    # and the matrix profile distance values with the lowest distance pair highlighted
+    """
+    Plot the original wave form with colorful patches highlighting the detected
+    pattern and the matrix profile distance values with the lowest distance
+    pair highlighted
+    :param timeLabels:
+    :param vData:
+    :param distData:
+    :param targetIX:
+    :param matchIX:
+    :param wwidth:
+    :param title:
+    :return:
+    """
     vMax = max(vData)
     vMin = min(vData)
     height = vMax - vMin
@@ -114,7 +130,50 @@ def plotMotifMatches(vData, indecies, wwidth, title=None):
     plt.show()
     return
 
-def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
+def expandVizWindow(indecies, wwidth, electrodes):
+    # Identify common windows for each signal event
+
+    eleCount = len(indecies)
+    commonStarts = indecies[0]
+    commonWwidth = wwidth
+    minOverlap = int(wwidth / 2)
+    commonPreWidth = 0
+    blinkAdded = False
+    binnedCount = [0] * eleCount
+    for eIX in range(1, eleCount):  # step through electrodes
+        for bIX in indecies[eIX]:  # step through blinks for the electrode
+            for comIX in range(len(commonStarts)):
+                # step through possible common matches for this blink
+                if (commonStarts[comIX] - commonPreWidth <= bIX < commonStarts[comIX] + commonWwidth or
+                        commonStarts[comIX] - commonPreWidth <= bIX + wwidth < commonStarts[comIX] + commonWwidth):
+                    # this blink for this electrode overlaps with the
+                    # current common window. If the common window doesn't
+                    # completely engulf the blink then extend either the
+                    # beginning or the end (delta)
+                    if commonPreWidth + commonWwidth > 1.5 * wwidth:
+                        # don't extend window range because the expansion
+                        # guardrails suggest this is too extreme
+                        blinkAdded = False
+                        break
+                    # expand the preceding boundary if appropriate
+                    if 0 < (commonStarts[comIX] - commonPreWidth) - bIX < minOverlap:
+                        commonPreWidth += (commonStarts[comIX] - commonPreWidth) - bIX
+                    if 0 < (bIX + wwidth) - (commonStarts[comIX] + commonWwidth) < minOverlap:
+                        commonWwidth += (bIX + wwidth) - (commonStarts[comIX] + commonWwidth)
+                    blinkAdded = True
+                    binnedCount[eIX] += 1
+                    break
+            if blinkAdded:
+                blinkAdded = False
+                continue
+        print(f"{electrodes[eIX] if electrodes else ' '}{binnedCount[eIX]} of "
+              f"{len(indecies[eIX])} ({int(binnedCount[eIX]/len(indecies[eIX])*100)}%) "
+              f"binned ({len(commonStarts)} bins)")
+
+    return commonStarts, commonPreWidth, commonWwidth
+
+
+def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth,
                          electrodes=None, sortSize=True):
     """
     Show the collection of averaged events for each electrode as a
@@ -127,46 +186,44 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
     :param electrodes: electrode labels
     :return: None
     """
+    commonStarts, commonPreWidth, commonWwidth = expandVizWindow(indecies, wwidth, electrodes)
     eleCount = len(indecies)
-    if title is None:
-        title = f"All {len(indecies)} electrodes SYNCHED Averaged waves"
 
     # Identify common windows for each blink
-    commonStarts = indecies[0]
-    commonWwidth = wwidth
-    minOverlap = int(wwidth / 2)
-    commonPreWidth = 0
-    blinkAdded = False
-    binnedCount = [0] * eleCount
-    for eIX in range(1, eleCount): # step thru electrodes
-        for bIX in indecies[eIX]:  # step thru blinks for the electrode
-            for comIX in range(len(commonStarts)): # step thru possible common matches for this blink
-                if (commonStarts[comIX] - commonPreWidth <= bIX < commonStarts[comIX] + commonWwidth or
-                        commonStarts[comIX] - commonPreWidth <= bIX + wwidth < commonStarts[comIX] + commonWwidth):
-                    # this blink for this electrode overlaps with the current common window
-                    # If the common window doesn't completely engulf the blink then
-                    # extend either the beginning or the end (delta)
-                    print(f"#{1+binnedCount[eIX]} {eIX}:{bIX}:{comIX}:{commonStarts[comIX] - commonPreWidth} < ({bIX} ,{bIX + wwidth}) < {commonStarts[comIX] + commonWwidth}")
-                    if commonPreWidth + commonWwidth > 1.5 * wwidth:
-                        #print(f"Not extending due to expansion guardrails ({commonPreWidth} + {commonWwidth} > 1.5 * {wwidth}")
-                        blinkAdded = False
-                        break
-                    # expand the preceding boundary if appropriate
-                    if 0 < (commonStarts[comIX] - commonPreWidth) - bIX < minOverlap:
-                        print(f"{eIX}:{bIX}:{comIX}:START {commonStarts[comIX] - commonPreWidth}  > {bIX}: ({commonPreWidth} , {commonWwidth}) -> ", end="")
-                        commonPreWidth += (commonStarts[comIX] - commonPreWidth) - bIX
-                        print(f"({commonPreWidth} , {commonWwidth})")
-                    if 0 < (bIX + wwidth) - (commonStarts[comIX] + commonWwidth) < minOverlap:
-                        print(f"{eIX}:{bIX}:{comIX}:DELTA {commonStarts[comIX] + commonWwidth}  < {bIX + wwidth}: ({commonPreWidth} , {commonWwidth}) -> ", end="")
-                        commonWwidth += (bIX + wwidth) - (commonStarts[comIX] + commonWwidth)
-                        print(f"({commonPreWidth} , {commonWwidth})")
-                    blinkAdded = True
-                    binnedCount[eIX] += 1
-                    break
-            if blinkAdded:
-                blinkAdded = False
-                continue
-        print(f"{binnedCount[eIX]} of {len(indecies[eIX])} ({int(binnedCount[eIX]/len(indecies[eIX])*100)}%) binned ({len(commonStarts)} bins)")
+    # commonStarts = indecies[0]
+    # commonWwidth = wwidth
+    # minOverlap = int(wwidth / 2)
+    # commonPreWidth = 0
+    # blinkAdded = False
+    # binnedCount = [0] * eleCount
+    # for eIX in range(1, eleCount):  # step through electrodes
+    #     for bIX in indecies[eIX]:  # step through blinks for the electrode
+    #         for comIX in range(len(commonStarts)):
+    #             # step through possible common matches for this blink
+    #             if (commonStarts[comIX] - commonPreWidth <= bIX < commonStarts[comIX] + commonWwidth or
+    #                     commonStarts[comIX] - commonPreWidth <= bIX + wwidth < commonStarts[comIX] + commonWwidth):
+    #                 # this blink for this electrode overlaps with the
+    #                 # current common window. If the common window doesn't
+    #                 # completely engulf the blink then extend either the
+    #                 # beginning or the end (delta)
+    #                 if commonPreWidth + commonWwidth > 1.5 * wwidth:
+    #                     # don't extend window range because the expansion
+    #                     # guardrails suggest this is too extreme
+    #                     blinkAdded = False
+    #                     break
+    #                 # expand the preceding boundary if appropriate
+    #                 if 0 < (commonStarts[comIX] - commonPreWidth) - bIX < minOverlap:
+    #                     commonPreWidth += (commonStarts[comIX] - commonPreWidth) - bIX
+    #                 if 0 < (bIX + wwidth) - (commonStarts[comIX] + commonWwidth) < minOverlap:
+    #                     commonWwidth += (bIX + wwidth) - (commonStarts[comIX] + commonWwidth)
+    #                 blinkAdded = True
+    #                 binnedCount[eIX] += 1
+    #                 break
+    #         if blinkAdded:
+    #             blinkAdded = False
+    #             continue
+    #     print(f"{electrodes[eIX] if electrodes else ' '}{binnedCount[eIX]} of {len(indecies[eIX])} ({int(binnedCount[eIX]/len(indecies[eIX])*100)}%) binned ({len(commonStarts)} bins)")
+
     # create an average signal for each electrode over the common windows
     synchWaves = []
     window = np.ones(5)
@@ -183,12 +240,20 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth, title=None,
         ixMax = np.argmax(np.convolve(window, synchWaves[-1], mode='valid'))
         waveMaxes.append((electrodes[eIX], synchWaves[-1][0], timeLabels[ixMax], ixMax, synchWaves[-1][ixMax], np.convolve(window, synchWaves[-1], mode='valid')[ixMax]))
         print(f"{','.join(str(w) for w in waveMaxes[-1])}")
+
+    # Create a list of electrode positions ordered from the largest positive
+    # diversion to the largest negative diversion
     pos = [(ix, bb) for ix, bb in enumerate(synchWaves)]
     if sortSize:
         pos.sort(key=lambda x:-(np.max(x[1])-x[1][0]))
     posi = [p[0] for p in pos]
-    plotWaves([synchWaves[p] for p in posi], xLabels=timeLabels, labels=[electrodes[p] for p in posi],
-              zNorm=True, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Normed Waves")
+
+    # Plot sychronized waves with normalized values.
+    # plotWaves([synchWaves[p] for p in posi], xLabels=timeLabels, labels=[electrodes[p] for p in posi],
+    #           zNorm=True, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Normed Waves")
+
+    # Plot sychronized waves with values shifted vertically so that they all start
+    # at the same 0 y-coordinate.
     plotWaves([[v-syn[0] for v in syn] for syn in [synchWaves[p] for p in posi]],
               xLabels=timeLabels, labels=[electrodes[p] for p in posi],
               zNorm=False, title=f"Synchronized {len(electrodes)} Electrode Mean ({len(commonStarts)}) Zeroed Waves")
@@ -364,7 +429,7 @@ def findBlinks(initWave, vData, blinkDuration, sampleHz=1000,
         plt.title(f'Distance Profile E {electrode}')
         plt.show()
 
-    idx = np.argmin(distance_profile)
+    idx = int(np.argmin(distance_profile))
     if verbose > 2:
         print(f"The best match to Blink Template is located at index {idx} "
               f"(time: {tLabels[idx]})")
@@ -377,13 +442,14 @@ def findBlinks(initWave, vData, blinkDuration, sampleHz=1000,
     if verbose > 3:
         print(f"Adding Data Index, Time, Dissimilarity")
     for ix in disProf[:candidateCount]:
-        if any(b - wwidth < ix < b + wwidth for b in blinkIxs):
+        ix_I = int(ix)
+        if any(b - wwidth < ix_I < b + wwidth for b in blinkIxs):
             pass
         else:
             if verbose > 3:
-                print(f"Adding {ix} {tLabels[ix]} {distance_profile[ix]}")
-            blinkIxs.append(ix)
-            blinkDis.append(distance_profile[ix])
+                print(f"Adding {ix_I} {tLabels[ix_I]} {distance_profile[ix_I]}")
+            blinkIxs.append(ix_I)
+            blinkDis.append(distance_profile[ix_I])
     blinkDuo = sorted(zip(blinkIxs, blinkDis), key=lambda x:x[0])
     blinkIxs = [x[0] for x in blinkDuo]
     blinkDis = [x[1] for x in blinkDuo]
@@ -405,3 +471,56 @@ def  zeroOutOfRange(data):
     badVal = 0
     cleaned = [x if minReal < x < maxReal else badVal for x in data]
     return cleaned
+
+def stratifyForColors(chVals, ignores, binCount, mn, mx, ignoreVal):
+    """
+    organize a set of channel values into a collection of ordered bins that
+    can be used to specify channel colors for mne.viz.plot_sensors()
+
+    :param chVals: a dictionary of channel labels and associated values
+    :param ignores: list of channel labels for channels to ignore
+    :param binCount: integer number of levels to separate the values into
+    :param mn: minimum value to include
+    :param mx: maximum value to include
+    :param ignoreVal: value to associate with ignored channels (e.g., mn)
+    :return: a list of bins with channel labels organized into them by value
+    """
+    valueList = [[] for i in range(binCount)]
+    rng = mx - mn
+    binCnt = binCount - 1
+    for chL, chV in chVals.items():
+        binIX = int(((chV-mn)*binCnt/rng))
+        valueList[binIX].append(chL)
+    for chL in ignores:
+        binIX = int(((ignoreVal-mn)*binCnt/rng))
+        valueList[binIX].append(chL)
+    return valueList
+
+def plotSensorStrengths(goodChannels, waveRespMetrics, electLabels, montageFunc, info):
+
+    montage = make_standard_montage('GSN-HydroCel-129')
+    montage.ch_names[-1] = 'E129'
+    montageFunc(montage, match_case=False)
+    ignoreChannels = [x for x in montage.ch_names if x not in goodChannels]
+    ignoreIndecies = [electLabels.index(x) for x in ignoreChannels]
+
+    waveRespMetrics.sort(key=lambda x:(x[4] - x[1]))
+    print(f"waveRespMetrics: {waveRespMetrics}")
+    sensorIndeciesVals = dict({int(w[0][1:])-1: w[4]-w[1] for w in waveRespMetrics})
+
+    cmapf = cm.binary # cm.cool
+    resMaxDiff = max(x[4]-x[1] for x in waveRespMetrics)
+    resMinDiff = min(x[4]-x[1] for x in waveRespMetrics)
+    chCategories = stratifyForColors(sensorIndeciesVals, ignores=ignoreIndecies,
+                                     binCount=cmapf.N, mn=resMinDiff, mx=resMaxDiff,
+                                     ignoreVal=resMinDiff)
+
+    print("Add colorbar key")
+    norm = colors.Normalize(vmin=resMinDiff, vmax=resMaxDiff)
+    sm = cm.ScalarMappable(cmap=cmapf, norm=norm)
+    fig3, ax = plt.subplots()
+    uu = plot_sensors(info, ch_type="eeg", axes=ax, ch_groups=chCategories,
+                      cmap=cmapf, linewidth=0, pointsize=50, show_names=False,
+                      kind="topomap", to_sphere=True, show=False)
+    cbar = uu.colorbar(sm, ax=ax)
+    uu.show()
