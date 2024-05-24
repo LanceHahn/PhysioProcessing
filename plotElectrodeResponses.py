@@ -11,6 +11,16 @@ from blinkDection import (findBlinkWave, findBlinks, combineWaves, plotWaves, ze
 
 
 def getChannels(askUser, electLabels, channelString, badChannelString):
+    """
+        Acquire channel list from user or passed parameters
+    :param askUser: whether to ask the user for times
+    :param electLabels: list of string electrode labels (e.g., 'E1')
+    :param channelString: space-delimited list of numerical electrode labels
+    that should be included in pipeline.  It may include 'ALL'
+    :param badChannelString: space-delimited list of numerical electrode labels
+     that should be excluded in pipeline.
+    :return: AllElect - whether 'ALL' is included, goodChannels list of channels ['E1', 'E2', ...]
+    """
     if askUser:
         channelString = input("Provide a space-delimited list of channel numbers (defaulty 14): ")
         if len(channelString) < 1:
@@ -31,7 +41,15 @@ def getChannels(askUser, electLabels, channelString, badChannelString):
         goodChannels = ["E" + ch for ch in goodChannels]
     return AllElect, goodChannels
 
+
 def getTimes(askUser, learnStartTime, learnStopTime):
+    """
+    Acquire start/stop times from user or passed parameters
+    :param askUser: whether to ask the user for times
+    :param learnStartTime: passed parameter time (s)
+    :param learnStopTime: passed parameter time (s)
+    :return: startTime, endTime
+    """
     if askUser:
         timeString = input("Provide a start time in seconds (default: 707):")
         if len(timeString) < 1:
@@ -47,6 +65,7 @@ def getTimes(askUser, learnStartTime, learnStopTime):
     else:
         endTime = learnStopTime
     return startTime, endTime
+
 
 def parse_args(params) -> argparse.Namespace:
     """Parses arguments from the command line."""
@@ -70,7 +89,7 @@ def parse_args(params) -> argparse.Namespace:
     args = parser.parse_args(params)
     return args
 
-# Convert NumPy arrays to Python lists
+
 def writeTemplateFile(dataIn, fName):
     """
     convert the numpy formatted data to something acceptable for JSON
@@ -96,6 +115,7 @@ def writeTemplateFile(dataIn, fName):
         json.dump(dataOut, json_file)
     return
 
+
 def readTemplateFile(fName):
     """
     read the JSON file and convert the 'blinkWave' data into numpy array
@@ -117,23 +137,132 @@ def readTemplateFile(fName):
                     dataOut[chan_I][vers][elem] = dataIn[chan][vers][elem]
     return dataOut
 
-def convert_np_arrays_to_lists(obj):
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    return obj
-# Define a custom decoder function to handle conversion of lists to NumPy arrays
-def custom_decoder(obj):
-    if '__ndarray__' in obj:
-        data = np.frombuffer(bytes.fromhex(obj['__ndarray__']['data']), dtype=obj['__ndarray__']['dtype'])
-        return data.reshape(obj['__ndarray__']['shape'])
-    return obj
+
+def extendWindow(expectedBlinks, delta, signals, signalDuration, sampleRate,
+                 data, timeLabels, srcLabel, verbose):
+    # EXTEND window until it alters the number of blinks discovered
+    #expectedBlinks = len(blinks1)
+    blinkCount = expectedBlinks
+    signalsExt = dict()
+    signalsExt['blinks'] = copy.deepcopy(signals['original']['blinks'])
+    signalsExt['blinksIndecies'] = copy.deepcopy(signals['original']['blinksIndecies'])
+    signalsExt['dissimilarity'] = copy.deepcopy(signals['original']['dissimilarity'])
+    signalsExt['blinkWave'] = signals['original']['blinkWave']
+    signalsExt['duration'] = signals['original']['duration']
+    # Expanding the duration of the target signal only makes sense if there
+    # is more than one signal already detected because expanding the
+    # duration of the target decreases the likelihood of multiple signals
+    # matching and 1 is the lowest possible count.
+    if blinkCount > 1:
+        waveDuration = signalDuration
+        while blinkCount == expectedBlinks:
+            waveDuration += delta
+            blinkDuration = waveDuration / sampleRate  # unit: seconds
+            print(f"Considering wave duration of {waveDuration}...")
+            sequ = data
+
+            # Find initial blink wave as best duplicated sequence.
+            blinkWaveW0 = findBlinkWave(sequ, blinkDuration,
+                                        sampleHz=sampleRate,
+                                        tLabels=timeLabels,
+                                        verbose=0, electrode=srcLabel)
+
+            blinksW0, blinkDisW0, _ = findBlinks(blinkWaveW0, sequ, blinkDuration,
+                                                 sampleHz=sampleRate,
+                                                 tLabels=timeLabels,
+                                                 verbose=0,
+                                                 electrode=srcLabel)
+            startTime, endTime = timeLabels[0], timeLabels[-1]
+            startIndecies = [np.where(timeLabels == b)[0][0] for b in blinksW0]
+            newBlinkWave = combineWaves([sequ[start: start + waveDuration]
+                                         for start in startIndecies])
+            if blinkCount == expectedBlinks:
+                print(f"{len(blinksW0)} Blinks per minute: {len(blinksW0) / ((endTime - startTime) / 60)}")
+                # Try again with new updated wave
+                print(f"Repeat blink discovery with wave generated from "
+                      f"{len(blinksW0)} detected waves.")
+                blinksW2, blinkDisW2, blinksIXsW2 = findBlinks(newBlinkWave, sequ,
+                                                               blinkDuration,
+                                                               sampleHz=sampleRate,
+                                                               tLabels=timeLabels,
+                                                               verbose=verbose,
+                                                               electrode=srcLabel)
+                blinkCount = len(blinksW2)
+                if blinkCount == expectedBlinks:
+                    signalsExt['blinks'] = copy.deepcopy(blinksW2)
+                    signalsExt['blinksIndecies'] = copy.deepcopy(blinksIXsW2)
+                    signalsExt['dissimilarity'] = copy.deepcopy(blinkDisW2)
+                    signalsExt['blinkWave'] = copy.deepcopy(newBlinkWave)
+                    signalsExt['duration'] = waveDuration
+                else:
+                    print(f"{srcLabel} Stop Extension: Signal count changed from {expectedBlinks} to {blinkCount}.")
+            else:
+                print(f"{srcLabel} Stop Extension: Signal count changed from {expectedBlinks} to {blinkCount}.")
+        waveDuration -= delta
+    return signalsExt
+
+
+def FindEvents(signals, askUser, findStartTime, findStopTime,
+               tLabels, sampleRate,
+               data, AllElect,
+               electLabels, goodIndecies, blinkDurationMS):
+    ### apply wave detection to full range of data
+    print("Going Big (longer timeline)")
+    print(f"Data time range is from 0 to {int(len(tLabels)/sampleRate)} seconds")
+    blinkDuration = blinkDurationMS / sampleRate
+    startTime, endTime = getTimes(askUser, findStartTime, findStopTime)
+    startIX = startTime * sampleRate
+    endIX = endTime * sampleRate
+    cleanData = [zeroOutOfRange(data[electIX][startIX:endIX]) for electIX in goodIndecies]
+    if not AllElect:
+        print("Generating plot of electrode signal(s)")
+        plotEEGs([cleanData[ix] for ix, electIX in enumerate(goodIndecies)],
+                 tLabels[startIX:endIX],
+                 [electLabels[electIX] for electIX in goodIndecies])
+
+    for ix, electIX in enumerate(goodIndecies):
+        sequ = np.array(cleanData[ix], dtype=np.float64)
+        blinksBig, blinksDisBig, blinkIXsBig = (
+            findBlinks(signals[electIX]['original']['blinkWave'],
+                       sequ, blinkDuration, sampleHz=sampleRate,
+                       tLabels=tLabels[startIX:endIX],  verbose=7 if not AllElect else 0, electrode=electLabels[electIX]))
+        signals[electIX]['Big']['blinkWave'] = copy.deepcopy(signals[electIX]['original']['blinkWave'])
+        signals[electIX]['Big']['blinks'] = blinksBig
+        signals[electIX]['Big']['blinksIndecies'] = blinkIXsBig
+        signals[electIX]['Big']['dissimilarity'] = blinksDisBig
+        signals[electIX]['Big']['duration'] = blinkDurationMS
+        print(f"{len(blinksBig)} Blinks per minute: {len(blinksBig)/((endTime-startTime)/60)}")
+    if len(goodIndecies) == 1:
+        electIX = goodIndecies[0]
+        plotMotifMatches(cleanData[0], signals[electIX]['Big']['blinksIndecies'],
+                         blinkDurationMS,
+                         title=f'Motif Match (Electrode {electLabels[electIX]})')
+    else:
+        if not AllElect:
+            eeg = []
+            for ix, electIX in enumerate(goodIndecies):
+                eeg.append(cleanData[ix])
+            patches = [signals[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies]
+            AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
+            plotMotifMatchesMultiElectrodes(eeg, tLabels[startIX:endIX], patches, blinkDurationMS,
+                                            title="All electrodes All waves ''", electrodes=AllBlinks)
+        for electIX in goodIndecies:
+            print(f"{electLabels[electIX]}: {signals[electIX]['Big']['blinks']}")
+        waveRespMetrics = plotSynchedMeanWaves([data[electIX][startIX:endIX] for electIX in goodIndecies],
+                             tLabels[startIX:endIX],
+                             [signals[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies],
+                             blinkDurationMS,
+                             electrodes=[electLabels[electIX] for electIX in goodIndecies])
+
+    return signals, waveRespMetrics
+
 def main(params):
 
     # incorporate user's parameters
     args = parse_args(params)
     fnameSetRaw = args.dataFile
     askUser = args.interactive.upper() == 'YES'
-    extendWindow = args.dynamicWindow.upper() == 'YES'
+    dynamicWindow = args.dynamicWindow.upper() == 'YES'
     sampleRate = args.sampleRate
     blinkDurationMS = args.eventDuration
     channelString = args.channels
@@ -143,7 +272,7 @@ def main(params):
     findStartTime = args.findStart
     findStopTime = args.findStop
     pipeline = args.pipeline
-    goBig = pipeline in {'FIND', 'ALL'}
+    doFindEvents = pipeline in {'FIND', 'ALL'}
     learn = pipeline in {'LEARN', 'ALL'}
     readTemplate = args.readTemplate
     writeTemplate = args.writeTemplate
@@ -229,88 +358,60 @@ def main(params):
             blinkOutcomes[electIX]['original']['blinksIndecies'] = blinkIXs1
             blinkOutcomes[electIX]['original']['dissimilarity'] = blinksDis1
             blinkOutcomes[electIX]['original']['duration'] = blinkDurationMS
-            print(f"{len(blinks1)} Blinks per minute: {len(blinks1)/((endTime-startTime)/60)}")
-            startIndecies = [np.where(tLabels == b)[0][0] - (startTime * 1000) for
-                             b in blinks1]
+            print(f"# {electLabels[electIX]} Blinks per minute ({len(blinks1)} "
+                  f"blinks): {len(blinks1)/((endTime-startTime)/60)}")
 
-            if extendWindow:
+            if dynamicWindow:
                 # EXTEND window until it alters the number of blinks discovered
                 delta = 30
                 print(f"The initial time window is being extended from a time "
                       f"window of {blinkDurationMS} by steps of "
                       f"{delta} ms until it alters the number of blinks...")
-                expectedBlinks = len(blinks1)
-                blinkCount = expectedBlinks
-                blinkOutcomes[electIX]['extended']['blinks'] =  copy.deepcopy(blinkOutcomes[electIX]['original']['blinks'])
-                blinkOutcomes[electIX]['extended']['blinksIndecies'] =  copy.deepcopy(blinkOutcomes[electIX]['original']['blinksIndecies'])
-                blinkOutcomes[electIX]['extended']['dissimilarity'] = copy.deepcopy(blinkOutcomes[electIX]['original']['dissimilarity'])
-                blinkOutcomes[electIX]['extended']['blinkWave'] = copy.deepcopy(newBlinkWave)
-                while blinkCount == expectedBlinks:
-                    waveDuration += delta
-                    blinkDuration = waveDuration / sampleRate  # unit: seconds
-                    print(f"Considering wave duration of {waveDuration}...")
-                    sequ = allData[electIX][startTime * sampleRate:endTime * sampleRate]
-
-                    # Find initial blink wave as best duplicated sequence.
-                    blinkWaveW0 = findBlinkWave(sequ, blinkDuration,
-                                              sampleHz=sampleRate,
-                                              tLabels=tLabels[startTime * 1000:endTime * 1000],
-                                              verbose=0, electrode=electLabels[electIX])
-
-                    blinksW0, blinkDisW0, _ = findBlinks(blinkWaveW0, sequ, blinkDuration,
-                                                  sampleHz=sampleRate,
-                                                  tLabels=tLabels[startTime * 1000:endTime * 1000],
-                                                  verbose=0, electrode=electLabels[electIX])
-
-                    startIndecies = [np.where(tLabels == b)[0][0] - (startTime * 1000) for
-                                     b in blinksW0]
-                    newBlinkWave = combineWaves([sequ[start: start + waveDuration]
-                                                 for start in startIndecies])
-
-                    print(f"{len(blinksW0)} Blinks per minute: {len(blinksW0)/((endTime-startTime)/60)}")
-
-                    # Try again with new updated wave
-                    print(f"Repeat blink discovery with wave generated from {len(blinksW0)} "
-                          f"detected waves.")
-                    blinksW2, blinkDisW2, blinksIXsW2 = findBlinks(newBlinkWave, sequ, blinkDuration,
-                                                    sampleHz=sampleRate,
-                                                    tLabels=tLabels[startTime * 1000: endTime * 1000],
-                                                    verbose=3 if not AllElect else 0, electrode=electLabels[electIX])
-                    print(f"{len(blinksW2)} Blinks per minute: {len(blinksW2)/((endTime-startTime)/60)}")
-                    blinkCount = len(blinksW2)
-                    if blinkCount == expectedBlinks:
-                        blinkOutcomes[electIX]['extended']['blinks'] = copy.deepcopy(blinksW2)
-                        blinkOutcomes[electIX]['extended']['blinksIndecies'] = copy.deepcopy(blinksIXsW2)
-                        blinkOutcomes[electIX]['extended']['dissimilarity'] = copy.deepcopy(blinkDisW2)
-                        blinkOutcomes[electIX]['extended']['blinkWave'] = copy.deepcopy(newBlinkWave)
-                        blinkOutcomes[electIX]['extended']['duration'] = waveDuration
-                waveDuration -= delta
+                blinkOutcomes[electIX]['extended'] = (
+                    extendWindow(len(blinks1), delta, blinkOutcomes[electIX],
+                                 blinkDurationMS, sampleRate,
+                                 allData[electIX][startTime * sampleRate:endTime * sampleRate],
+                                 tLabels[startTime * 1000:endTime * 1000],
+                                 electLabels[electIX],
+                                 verbose=3 if not AllElect else 0
+                                 ))
                 if not AllElect:
-                    plotWaves([blinkOutcomes[electIX]['extended']['blinkWave']], xLabels=[],
+                    plotWaves([blinkOutcomes[electIX]['extended']['blinkWave']],
+                              xLabels=[],
                               labels=[f'blink on {goodChannels[goodIndecies.index(electIX)]}'],
                               title=f"Extended wave {waveDuration} with {len(blinkOutcomes[electIX]['extended']['blinks'])} blinks"
                                     f" on {goodChannels[goodIndecies.index(electIX)]}")
             else:
-                print(f"extendWindow is False which means that the wave will "
-                      f"be held to the {blinkDurationMS} ms expected time window.")
+                print(f"dynamicWindow is False which means that the wave will be"
+                      f" held to the {blinkDurationMS} ms expected time window.")
                 if not AllElect:
                     plotWaves([blinkOutcomes[electIX]['original']['blinkWave']], xLabels=[],
                               labels=[f'blink on {goodChannels[goodIndecies.index(electIX)]}'],
-                              title=f"Final wave {waveDuration} with {len(blinkOutcomes[electIX]['original']['blinks'])} blinks"
+                              title=f"Final wave {waveDuration} with {len(blinkOutcomes[electIX]['original']['blinks'])} events"
                                     f" on {goodChannels[goodIndecies.index(electIX)]}")
 
-        if extendWindow:
+        if dynamicWindow:
+            if len(goodChannels) < 10:
+                title = f"Final wave(s) {', '.join([str(blinkOutcomes[k]['extended']['duration']) for k in blinkOutcomes.keys()])}ms with "+\
+                            f"{', '.join([str(len(blinkOutcomes[k]['extended']['blinks'])) for k in blinkOutcomes.keys()])} events" +\
+                            f" on {', '.join(goodChannels)}"
+            else:
+                title = f"Final {len(goodChannels)} wave(s) {sum([blinkOutcomes[k]['extended']['duration'] for k in blinkOutcomes.keys()])/len(blinkOutcomes)} ms with "+\
+                            f"{sum([len(blinkOutcomes[k]['extended']['blinks']) for k in blinkOutcomes.keys()])/len(blinkOutcomes)} events"
             plotWaves([blinkOutcomes[ix]['extended']['blinkWave'] for ix in goodIndecies], xLabels=[],
                       labels=goodChannels,
-                      title=f"Final wave(s) {', '.join([str(blinkOutcomes[k]['extended']['duration']) for k in blinkOutcomes.keys()])}ms with "
-                            f"{', '.join([str(len(blinkOutcomes[k]['extended']['blinks'])) for k in blinkOutcomes.keys()])} blinks"
-                            f" on {', '.join(goodChannels)}")
+                      title=title)
         else:
+            if len(goodChannels) < 10:
+                title = f"Final wave(s) {blinkDurationMS}ms with " +\
+                            f"{', '.join([str(len(blinkOutcomes[k]['original']['blinks'])) for k in blinkOutcomes.keys()])} blinks"+\
+                            f" on {', '.join(goodChannels)}"
+            else:
+                title = f"Final {len(goodChannels)}wave(s) {blinkDurationMS} ms with " +\
+                            f"{sum([len(blinkOutcomes[k]['original']['blinks']) for k in blinkOutcomes.keys()])/len(blinkOutcomes)} blinks"
             plotWaves([blinkOutcomes[ix]['original']['blinkWave'] for ix in goodIndecies],
                       xLabels=[], labels=goodChannels,
-                      title=f"Final wave(s) {blinkDurationMS}ms with "
-                            f"{', '.join([str(len(blinkOutcomes[k]['original']['blinks'])) for k in blinkOutcomes.keys()])} blinks"
-                            f" on {', '.join(goodChannels)}")
+                      title=title)
             startIX = startTime * sampleRate
             endIX = endTime * sampleRate
             if len(goodIndecies) == 1:
@@ -340,63 +441,17 @@ def main(params):
         # Open the JSON file and load its contents
         blinkOutcomes = readTemplateFile(readTemplate)
 
-    if goBig:
+    if doFindEvents:
         ### apply wave detection to full range of data
-        print("Going Big (longer timeline)")
-        print(f"Data time range is from 0 to {int(len(tLabels)/sampleRate)} seconds")
-
-        startTime, endTime = getTimes(askUser, findStartTime, findStopTime)
-        startIX = startTime * sampleRate
-        endIX = endTime * sampleRate
-        cleanData = [zeroOutOfRange(allData[electIX][startIX:endIX]) for electIX in goodIndecies]
-        if not AllElect:
-            print("Generating plot of electrode signal(s)")
-            plotEEGs([cleanData[ix] for ix, electIX in enumerate(goodIndecies)],
-                     tLabels[startIX:endIX],
-                     [electLabels[electIX] for electIX in goodIndecies])
-
-        for ix, electIX in enumerate(goodIndecies):
-            sequ = np.array(cleanData[ix], dtype=np.float64)
-            blinksBig, blinksDisBig, blinkIXsBig = (
-                findBlinks(blinkOutcomes[electIX]['original']['blinkWave'],
-                           sequ, blinkDuration, sampleHz=sampleRate,
-                           tLabels=tLabels[startIX:endIX],  verbose=7 if not AllElect else 0, electrode=electLabels[electIX]))
-            blinkOutcomes[electIX]['Big']['blinkWave'] = copy.deepcopy(blinkOutcomes[electIX]['original']['blinkWave'])
-            blinkOutcomes[electIX]['Big']['blinks'] = blinksBig
-            blinkOutcomes[electIX]['Big']['blinksIndecies'] = blinkIXsBig
-            blinkOutcomes[electIX]['Big']['dissimilarity'] = blinksDisBig
-            blinkOutcomes[electIX]['Big']['duration'] = blinkDurationMS
-            print(f"{len(blinksBig)} Blinks per minute: {len(blinksBig)/((endTime-startTime)/60)}")
-        if len(goodIndecies) == 1:
-            electIX = goodIndecies[0]
-            plotMotifMatches(cleanData[0], blinkOutcomes[electIX]['Big']['blinksIndecies'],
-                             waveDuration,
-                             title=f'Motif Match (Electrode {electLabels[electIX]})')
-        else:
-            if not AllElect:
-                eeg = []
-                for ix, electIX in enumerate(goodIndecies):
-                    eeg.append(cleanData[ix])
-                patches = [blinkOutcomes[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies]
-                AllBlinks = [electLabels[electIX] for electIX in goodIndecies]
-                plotMotifMatchesMultiElectrodes(eeg, tLabels[startIX:endIX], patches, waveDuration,
-                                                title="All electrodes All waves ''", electrodes=AllBlinks)
-            for electIX in goodIndecies:
-                print(f"{electLabels[electIX]}: {blinkOutcomes[electIX]['Big']['blinks']}")
-            waveRespMetrics = plotSynchedMeanWaves([allData[electIX][startIX:endIX] for electIX in goodIndecies],
-                                 tLabels[startIX:endIX],
-                                 [blinkOutcomes[electIX]['Big']['blinksIndecies'] for electIX in goodIndecies],
-                                 waveDuration,
-                                 electrodes=[electLabels[electIX] for electIX in goodIndecies])
-
-
+        blinkOutcomes, waveRespMetrics = FindEvents(blinkOutcomes, askUser, findStartTime, findStopTime,
+                                   tLabels, sampleRate,
+                                   allData, AllElect,
+                                   electLabels, goodIndecies, blinkDurationMS)
     if len(writeTemplate) > 1:
         print(f"Writing wave templates to {writeTemplate}")
         writeTemplateFile(blinkOutcomes, writeTemplate)
-
     plotSensorStrengths(goodChannels, waveRespMetrics, electLabels,
                         testRaw.set_montage, testRaw.info)
-
     print("done")
     return
 
@@ -417,6 +472,7 @@ if __name__ == "__main__":
                 '--learnStop', '721',
                 '--findStart', '900',
                 '--findStop', '1000',
+                '--dynamicWindow', 'YES',
                 '--pipeline', 'ALL',  # 'LEARN', 'FIND', 'ALL'
                 '--readTemplate', 'waveTemplate.json',
                 '--writeTemplate', 'waveTemplate.json',
