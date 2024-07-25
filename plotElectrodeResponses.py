@@ -140,8 +140,22 @@ def readTemplateFile(fName):
 
 def extendWindow(expectedBlinks, delta, signals, signalDuration, sampleRate,
                  data, timeLabels, srcLabel, verbose):
-    # EXTEND window until it alters the number of blinks discovered
-    #expectedBlinks = len(blinks1)
+    """
+    EXTEND window until it alters the number of blinks discovered.  Only accept
+    an updated, extended duration window if it does not alter the number of
+    signals detected.
+    :param expectedBlinks: (int) Number of blinks expected in sample examined
+    :param delta: (int) ms increment to use when widening the duration window
+    :param signals: (dict) structure holding the signals that have already been identified
+    :param signalDuration: (int) original ms expected signal duration
+    :param sampleRate: (int) Hz data sample rate
+    :param data: (list of floats) time series data for examination
+    :param timeLabels: time labels associated with time series data
+    :param srcLabel: (str) label for data source (electrode #)
+    :param verbose: (int) verbosity to use for showing work
+    :return: (dict) structure describing new extended singals
+    """
+
     blinkCount = expectedBlinks
     signalsExt = dict()
     signalsExt['blinks'] = copy.deepcopy(signals['original']['blinks'])
@@ -206,7 +220,24 @@ def FindEvents(signals, askUser, findStartTime, findStopTime,
                tLabels, sampleRate,
                data, AllElect,
                electLabels, goodIndecies, blinkDurationMS):
+    """
     ### apply wave detection to full range of data
+    :param signals: dict of electrode index as key and results of analysis associated with each data source
+    :param askUser: Boolean, Should user be asked for parameters?
+    :param findStartTime: int, start of time (in msec) window considered
+    :param findStopTime: int, end of time (in msec) window considered
+    :param tLabels: ndarray, dim: # data points, float label for the time series of data collection
+    :param sampleRate: int - samples per second
+    :param data: ndarray dim: # dataSources x # data points - the data for each source at each collection time
+    :param AllElect: Boolean - Are all electrodes (with some exceptions specified) being examined?
+    :param electLabels: list of strings - the labels for each electrode data source
+    :param goodIndecies: list of ints - the list indecies of the electrodes examined
+    :param blinkDurationMS: int - expected duration window of event
+    :return:    signals updated dict of electrode index as key and results of analysis associated with each data source
+                waveRespMetrics - list of 6-tuples describing the event wave,
+                                    Electrode, Starting val, Max (t), index, max found by conv, max conv
+    """
+
     print("Going Big (longer timeline)")
     print(f"Data time range is from 0 to {int(len(tLabels)/sampleRate)} seconds")
     blinkDuration = blinkDurationMS / sampleRate
@@ -231,7 +262,7 @@ def FindEvents(signals, askUser, findStartTime, findStopTime,
         signals[electIX]['Big']['blinksIndecies'] = blinkIXsBig
         signals[electIX]['Big']['dissimilarity'] = blinksDisBig
         signals[electIX]['Big']['duration'] = blinkDurationMS
-        print(f"{len(blinksBig)} Blinks per minute: {len(blinksBig)/((endTime-startTime)/60)}")
+        print(f"#{electLabels[electIX]} {len(blinksBig)} Blinks per minute: {len(blinksBig)/((endTime-startTime)/60)}")
     if len(goodIndecies) == 1:
         electIX = goodIndecies[0]
         plotMotifMatches(cleanData[0], signals[electIX]['Big']['blinksIndecies'],
@@ -282,7 +313,6 @@ def main(params):
         fname = input(f"Name of the data file (default: {fnameSetRaw}? ")
         if len(fname) > 1:
             fnameSetRaw = fname
-    if askUser:
         fname = input(f"Name of the data file (default: {readTemplate}? ")
         if len(fname) > 1:
             readTemplate = fname
@@ -330,7 +360,8 @@ def main(params):
             blinkWave = findBlinkWave(sequ, blinkDuration,
                                       sampleHz=sampleRate,
                                       tLabels=tLabels[startTime*1000:endTime*1000],
-                                      verbose=2 if not AllElect else 0, electrode=electLabels[electIX])
+                                      verbose=2 if not AllElect else 0,
+                                      electrode=electLabels[electIX])
 
             # Find all instances of this signal event within the time range
             blinks, blinkDis, _ = (
@@ -339,6 +370,7 @@ def main(params):
                            tLabels=tLabels[startTime*1000:endTime*1000],
                            verbose=3 if not AllElect else 0,
                            electrode=electLabels[electIX]))
+            # Create new wave template that is the average
             startIndecies = [np.where(tLabels == b)[0][0] - (startTime*1000) for b in blinks]
             newBlinkWave = combineWaves([sequ[start: start + blinkDurationMS]
                                          for start in startIndecies])

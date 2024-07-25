@@ -233,13 +233,13 @@ def plotSynchedMeanWaves(vData, tLabels, indecies, wwidth,
     for comIX in range(len(commonStarts)):
         print(f"{comIX+1}:{tLabels[commonStarts[comIX] - commonPreWidth]}:{tLabels[commonStarts[comIX] + commonWwidth]}")
 
-    print("Electrode, Starting val, Max (t), index, max found by conv, max conv")
+    # print("Electrode, Starting val, Max (t), index, max found by conv, max conv")
     for eIX in range(eleCount):
         synchWaves.append(np.mean([vData[eIX][commonStarts[comIX] - commonPreWidth:commonStarts[comIX] + commonWwidth]
                                   for comIX in range(len(commonStarts))],axis=0))
         ixMax = np.argmax(np.convolve(window, synchWaves[-1], mode='valid'))
         waveMaxes.append((electrodes[eIX], synchWaves[-1][0], timeLabels[ixMax], ixMax, synchWaves[-1][ixMax], np.convolve(window, synchWaves[-1], mode='valid')[ixMax]))
-        print(f"{','.join(str(w) for w in waveMaxes[-1])}")
+        # print(f"{','.join(str(w) for w in waveMaxes[-1])}")
 
     # Create a list of electrode positions ordered from the largest positive
     # diversion to the largest negative diversion
@@ -515,7 +515,7 @@ def plotSensorStrengths(goodChannels, waveRespMetrics, electLabels, montageFunc,
                                      binCount=cmapf.N, mn=resMinDiff, mx=resMaxDiff,
                                      ignoreVal=resMinDiff)
 
-    print("Add colorbar key")
+    ## Add colorbar key
     norm = colors.Normalize(vmin=resMinDiff, vmax=resMaxDiff)
     sm = cm.ScalarMappable(cmap=cmapf, norm=norm)
     fig3, ax = plt.subplots()
